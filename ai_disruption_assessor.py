@@ -15,7 +15,7 @@ For each company it:
   2. Passes the extracted sections — labelled and separated — to Claude
      with a system prompt that maps each section to the dimensions it
      evidences.
-  3. Scores the four vulnerability dimensions (0–5 each) and five gates.
+  3. Scores the four vulnerability dimensions (0–5 each) and six gates.
   4. Identifies the gate most likely to open first and what triggers it.
   5. Writes results to a CSV and prints a ranked summary table.
 
@@ -92,17 +92,20 @@ class AssessmentResult:
     source_used: str
     sections_extracted: dict = field(default_factory=dict)  # name → char count
 
-    dim1_cognitive_rent:       DimensionScore = field(default_factory=lambda: DimensionScore(0, ""))
-    dim2_dgf_properties:       DimensionScore = field(default_factory=lambda: DimensionScore(0, ""))
-    dim3_reward_verifiability: DimensionScore = field(default_factory=lambda: DimensionScore(0, ""))
-    dim4_data_availability:    DimensionScore = field(default_factory=lambda: DimensionScore(0, ""))
+    dim1_cognitive_rent:            DimensionScore = field(default_factory=lambda: DimensionScore(0, ""))
+    dim2_dgf_properties:            DimensionScore = field(default_factory=lambda: DimensionScore(0, ""))
+    dim3_reward_verifiability:      DimensionScore = field(default_factory=lambda: DimensionScore(0, ""))
+    dim4_data_availability:         DimensionScore = field(default_factory=lambda: DimensionScore(0, ""))
+    dim5_workflow_disintermediation:DimensionScore = field(default_factory=lambda: DimensionScore(0, ""))
+    dim6_interface_substitution:    DimensionScore = field(default_factory=lambda: DimensionScore(0, ""))
 
     composite_score:     float = 0.0
     vulnerability_label: str   = ""
 
-    gates:              list = field(default_factory=list)
-    first_gate_to_open: str = ""
-    first_gate_trigger: str = ""
+    gates:                  list = field(default_factory=list)
+    gate_composite_score:   float = 0.0
+    binding_gate:           str = ""
+    binding_gate_rationale: str = ""
 
     raw_llm_response: str = ""
 
@@ -118,9 +121,9 @@ class AssessmentResult:
 #   why           — annotation sent in the prompt explaining what to look for
 #
 # Dimension / gate mapping (sent to Claude in the system prompt):
-#   Item 1  Business   → D1, D2, D4, G3, G4, G5
+#   Item 1  Business   → D1, D2, D4, G3, G4, G5, G6
 #   Item 1A Risk Fac   → D2, D3, D4, G1, G2, G4  ← most candid AI risk signal
-#   Item 7  MD&A       → D1, D2, G3
+#   Item 7  MD&A       → D1, D2, G3, G6
 #   Item 2  Properties → G5
 #   Item 3  Legal      → G1, G2
 # ─────────────────────────────────────────────────────────────────────────────
@@ -142,8 +145,8 @@ SECTION_CONFIG = [
         "why": (
             "Core business model, product descriptions, data assets, "
             "expert networks, competition. Primary evidence for D1, D2, D4 "
-            "and for the Institutional Inertia (G3), Trust (G4), and "
-            "Physical Last-Mile (G5) gates."
+            "and for the Institutional Inertia (G3), Trust (G4), "
+            "Physical Last-Mile (G5), and Network Effects (G6) gates."
         ),
     },
     {
@@ -186,8 +189,9 @@ SECTION_CONFIG = [
         "why": (
             "Revenue and cost structure, segment operating margins, "
             "subscription vs. transaction mix, growth drivers. "
-            "Primary evidence for D1 (cognitive rent share) and G3 "
-            "(Institutional Inertia — subscription stickiness)."
+            "Primary evidence for D1 (cognitive rent share), G3 "
+            "(Institutional Inertia — subscription stickiness), and G6 "
+            "(Network Effects — network scale and growth dynamics)."
         ),
     },
     {
@@ -593,35 +597,57 @@ FRAMEWORK
 
 AI substitutes capital for cognitive labor. Vulnerability is determined by
 four structural dimensions, each scored 0–5 (0 = low risk, 5 = high risk),
-then filtered through five gating mechanisms.
+then filtered through six gating mechanisms.
 
 FOUR DIMENSIONS
 ───────────────
 D1 — Cognitive Rent Share
-  What fraction of revenue is earned by applying cognitive labor to
-  structured problems, vs. deploying physical capital?
+  What fraction of the industry's value creation depends on human cognitive
+  labor vs. physical labor or physical asset deployment?
+  Observable indicator: labor cost as a fraction of revenue, weighted by
+  cognitive intensity. High revenue per employee with low physical capital
+  requirements = high cognitive rent share.
   Evidence in filing: cost structure (R&D + labor-heavy COGS vs. capex),
   product descriptions, asset-light language, revenue per employee.
+  Scoring note: high cognitive rent share in a platform/marketplace context
+  may overstate standalone vulnerability — cross-reference with G5 and G6.
   0 = capital-intensive physical business (manufacturing, logistics, mining)
   5 = pure knowledge service; near-zero physical capital; 100% cognitive rent
 
 D2 — Data Generating Function (DGF) Properties
-  Where do the company's core tasks sit on two axes?
-    Axis 1 — Rule stability: governed by stable external rules (tax code,
-             GAAP, clinical protocols) or volatile judgment-driven domain?
-    Axis 2 — Outcome determinism: objectively specifiable output or
-             stochastic / creative?
-  Upper-left (stable + deterministic) = maximally AI-compressible.
+  How compressible is the industry's data generating function? Score along
+  two axes:
+    Axis 1 — Rule stability: half-life of the ruleset. Software compilation
+             rules are essentially permanent. Tax codes change annually.
+             Market microstructure evolves continuously.
+    Axis 2 — Outcome determinism: how deterministic is input→output under
+             fixed rules? Compiling code is fully deterministic. Medical
+             diagnosis has significant stochastic residual. Stock return
+             prediction has massive stochastic residual even under fixed rules.
+  Stable rules + deterministic outcomes = most compressible (score 5).
+  Unstable rules + stochastic outcomes = least compressible (score 0).
+  Key refinement: distinguish bounded non-stationarity (new data within
+  known rules — AI handles well) from unbounded non-stationarity (rules
+  themselves change through reflexivity, policy, competition — AI handles
+  poorly).
   Evidence in filing: product descriptions, competition section, risk factors
   citing regulatory change or AI substitution.
   0 = volatile rules + stochastic outcomes (hardest to compress)
   5 = stable rules + deterministic outputs (easiest to compress)
 
 D3 — Reward Function Verifiability
-  Can the quality of cognitive output be verified objectively and quickly
-  against an external ground truth?
-  High: code compiles/fails, tax return accepted/rejected, audit upheld.
-  Low: strategy advice, therapy, creative direction.
+  How cheaply, quickly, and unambiguously can the correctness of an
+  AI-generated outcome be verified?
+  High verifiability (4–5): binary, immediate, machine-readable feedback
+  (code compiles/fails, tax return accepted/rejected, audit upheld).
+  Medium verifiability (2–3): available but delayed or expert-dependent
+  (legal contract assessed against precedent, financial trade P&L over
+  months).
+  Low verifiability (0–1): slow, ambiguous, confounded, or subjective
+  (patient outcomes, policy impact, therapeutic relationship value).
+  Stakes asymmetry: reversible errors (bug fix) tolerate faster adoption;
+  irreversible errors (misdiagnosis) demand higher verification, slowing
+  adoption regardless of capability.
   Evidence in filing: risk factors mentioning government alternatives or AI
   substitution (management implicitly acknowledges output is verifiable);
   product accuracy guarantees; professional licensing requirements.
@@ -629,56 +655,169 @@ D3 — Reward Function Verifiability
   5 = output verified against objective external ground truth
 
 D4 — Data Availability  ⚠ HIGH availability = HIGH risk
-  How difficult is it for a competitor to assemble training data needed to
-  replicate the company's core cognitive tasks?
-  High availability (risky): tasks trainable on abundant public data.
-  Low availability (protective): decades of proprietary transaction records;
-  requires physical presence to collect; not synthetically replicable.
+  Can the AI be trained effectively given available data? Score both sides:
+  (1) Attacker's access — is training data available through public sources,
+  purchasable datasets, or synthesis? Consider three scarcity types:
+    • Structural scarcity: domain complexity, few cases per condition
+    • Regulatory scarcity: data exists but blocked by HIPAA, GDPR, etc.
+    • Institutional scarcity: data siloed across organizations
+  (2) Defender's data moat — does the incumbent hold exclusive operational
+  data (transaction histories, routing, customer behavior) that compounds
+  its AI advantage and can't be replicated from public sources?
+  Synthetic data feasibility also matters: industries where synthetic data
+  is safe and effective will be disrupted faster.
   Evidence in filing: data asset descriptions in Business section; data
   portability / privacy risk factors; scale of accumulated records.
-  0 = highly proprietary, decades-accumulated data no one else can replicate
-  5 = tasks trainable entirely on cheap, abundant public data
+  0 = highly proprietary data + strong defender moat no one can replicate
+  5 = tasks trainable on cheap abundant public data, no defender data moat
 
-COMPOSITE SCORE = average of D1–D4
+D5 — Workflow Disintermediation  ⚠ HIGH score = HIGH risk
+  Does AI collapse or bypass the multi-step workflow this product
+  orchestrates? Score across three sub-dimensions:
+  (1) Product role — is it a connector, aggregator, or orchestrator sitting
+  between other systems rather than a terminal endpoint? Intermediary
+  products are exposed when AI agents can call upstream and downstream
+  systems directly, removing the need for the middleman.
+  (2) Workflow collapsibility — can an AI agent compress the multi-step
+  process the product currently manages into a single prompt-to-output
+  sequence? Count the discrete human handoffs or system hops the product
+  orchestrates. The more hops that can be collapsed, the higher the score.
+  (3) End-to-end automation — can the full workflow be automated without
+  the product's involvement? If inputs and outputs are both machine-readable
+  and the transformation logic is learnable, the intermediary is structurally
+  exposed.
+  Evidence in filing: product descriptions (integration, connector, API,
+  workflow, orchestration language); competitive risk factors discussing AI
+  agents or workflow automation; revenue model (per-seat vs. per-transaction
+  suggests orchestration depth).
+  0 = product IS the terminal endpoint; deeply embedded proprietary workflow;
+      not bypassable; each step requires unique contextual judgment
+  5 = pure connector or aggregator; workflow trivially collapsible by AI
+      agents; no proprietary orchestration logic; inputs/outputs fully
+      machine-readable
+
+D6 — Interface Substitution  ⚠ HIGH score = HIGH risk
+  Risk that AI agents bypass the product's UI or interaction layer entirely.
+  Distinct from D5 (workflow collapse across systems): D6 asks whether the
+  value of THIS PRODUCT'S OWN INTERFACE gets substituted by agents or
+  copilots that interact with underlying APIs or data directly, removing
+  the need for a human to navigate the UI.
+  Score across four sub-dimensions:
+  (1) UI-centric value — does the product's value primarily reside in UI
+  navigation, clicks, and workflow steps rather than in proprietary
+  underlying data or computation? When the UI is the only moat, agents
+  can bypass it. When deep data or logic sits behind the UI, the interface
+  is less exposed.
+  (2) Agent/copilot overlap — can AI agents or vendor-supplied copilots
+  replicate or replace the interaction layer? Look for: agents calling
+  product APIs directly, other vendors building AI layers on top, risk
+  factors discussing AI automation of manual steps.
+  (3) Seat/license consolidation — does the pricing model depend on human
+  operators (per-seat, per-user licensing)? AI that reduces the number of
+  human operators directly compresses revenue. Look for per-seat pricing
+  language, risk factors about seat count pressure, agent-per-seat models.
+  (4) UI commoditization signals — filing language acknowledging AI
+  automation replacing manual workflow steps, platform consolidation risk,
+  or vendor consolidation reducing distinct tool count.
+  Evidence in filing: pricing model descriptions (per-seat vs. usage-based);
+  risk factors citing AI agents, copilots, or automation displacing human
+  operators; competitive risks from platform consolidation; product
+  descriptions of UI-centric value vs. data/logic-centric value.
+  0 = value is in irreplaceable underlying data, logic, or computation;
+      UI is a thin disposable access layer; no per-seat exposure
+  5 = value almost entirely in UI/workflow navigation; agents can fully
+      bypass via APIs; per-seat model directly threatened by AI reducing
+      operator count; multiple vendors building copilots on top
+
+COMPOSITE SCORE = average of D1–D6
   0.0–1.5 → Low Vulnerability
   1.5–2.5 → Low-Moderate Vulnerability
   2.5–3.5 → Moderate-High Vulnerability
   3.5–4.5 → High Vulnerability
   4.5–5.0 → Very High Vulnerability
 
-FIVE GATING MECHANISMS
-──────────────────────
+SIX GATING MECHANISMS
+─────────────────────
 Even a high composite-score business may be protected if gates are strong.
 Rate each gate: None / Low / Medium / High / Very High.
+Each gate has a DURABILITY CLASS that determines how it erodes over time:
+  Hard (×1.5)       — requires external authority (policy, judicial) to change;
+                       does not erode over time
+  Structural (×1.25) — requires physical infrastructure or network buildout;
+                       doesn't erode from market forces alone
+  Soft (×1.0)        — erodes continuously through competition and
+                       generational change
 
-G1 — Regulatory Gate
-  Licensing, government approvals, mandatory audits, industry regulations
-  that AI products cannot easily satisfy.
+G1 — Regulatory Gate  [HARD]
+  Does AI deployment require explicit government approval, or do judicial/
+  structural rulings bar or slow new AI entrants? Includes licensing regimes,
+  approval processes, and court-ordered market restructuring.
+  Hard gate: holds until a policy or judicial decision flips it.
   Evidence: Item 1 regulatory environment, Item 1A regulatory risks, Item 3.
 
-G2 — Liability Gate
-  Who bears legal risk for errors? Does that create friction for AI adoption?
-  Guarantees, indemnification clauses, malpractice exposure signal the gate.
+G2 — Liability Gate  [STRUCTURAL]
+  Who bears the cost of AI error, and does unclear liability create
+  human-in-the-loop friction? Includes financial infrastructure embeddedness
+  where the transaction must route through the incumbent regardless of who
+  initiates it. Opens when liability frameworks clarify through legislation,
+  case law, or insurance pricing.
   Evidence: Item 1A liability risks, Item 3 legal proceedings, Item 1
-  product guarantee language.
+  product guarantee language, payment/settlement infrastructure descriptions.
 
-G3 — Institutional Inertia Gate
-  Switching costs, embedded workflows, multi-year enterprise contracts, data
-  continuity requirements. Annual consumer habits = weak; ERP replacement =
-  strong.
+G3 — Institutional Inertia Gate  [SOFT]
+  Switching costs, procurement cycles, legacy system integration,
+  professional guild resistance, long contract durations, and deep
+  integration into customer operations. Soft gate: erodes continuously as
+  contracts expire and AI-native decision-makers enter authority.
   Evidence: Item 1 customer/contract descriptions, Item 7 subscription vs.
   transaction revenue mix.
 
-G4 — Trust Gate
-  Does the customer require human judgment or presence for psychological or
-  cultural reasons, independent of AI capability?
+G4 — Trust Gate  [SOFT]
+  Psychological or cultural requirement for a trusted party — human or
+  established brand — at the point of delivery or decision. Erodes
+  generationally; among the slowest gates to open but erosion is largely
+  irreversible.
   Evidence: Item 1A reputational risks, human expert network descriptions,
   professional licensing language.
 
-G5 — Physical Last-Mile Gate
-  Does the service require physical presence at point of delivery?
+G5 — Physical Last-Mile Gate  [STRUCTURAL]
+  Must the service be delivered in person or at a physical location?
+  Includes multi-sided physical coordination across customers, suppliers,
+  and workers. Most structurally durable gate: persists until general-purpose
+  robotics matures.
   Evidence: Item 2 properties (field office network vs. HQ-only), Item 1
   product delivery descriptions, any field service / on-site language.
+
+G6 — Network Effects Gate  [STRUCTURAL]
+  Multi-sided market network effects requiring simultaneous competitive
+  displacement across all market sides. A three-sided market is harder to
+  displace than two-sided, which is harder than single-sided. Scores the
+  structural difficulty of bootstrapping a competing network from scratch,
+  even if the cognitive tasks are fully replicable.
+  Evidence: Item 1 marketplace/platform descriptions, number of market
+  sides served, Item 7 discussion of network scale and growth dynamics.
+
+COMPOSITE GATE SCORE
+────────────────────
+Convert gate strengths to numeric (None=0, Low=1, Medium=2, High=3,
+Very High=4), multiply each by its durability weight (Hard=1.5,
+Structural=1.25, Soft=1.0), average across all six gates, then normalize
+to a 0–5 scale by multiplying by (5/4). Higher = better protected.
+Report this as "gate_composite_score" in the JSON output.
+
+BINDING GATE
+────────────
+The binding gate is the gate with the highest EFFECTIVE STRENGTH on the
+critical attack path. Effective strength = numeric strength × durability
+multiplier. A "High" hard gate (3 × 1.5 = 4.5) outranks a "Very High"
+soft gate (4 × 1.0 = 4.0) because it doesn't erode over time.
+When identifying the binding gate:
+  1. Consider the realistic attack path — which gates must an AI disruptor
+     actually pass through to compete?
+  2. Among those gates, select the one with highest effective strength.
+  3. If an open/low gate is shielded by a strong gate behind it, the
+     strong gate is binding, not the weak one.
+Report this as "binding_gate" and "binding_gate_rationale" in the JSON.
 
 ════════════════════════════════════════
 SOURCE MATERIAL AND SECTION MAPPING
@@ -687,11 +826,11 @@ SOURCE MATERIAL AND SECTION MAPPING
 You will receive sections extracted from the company's most recent 10-K,
 each annotated with which dimensions and gates it primarily evidences:
 
-  ITEM 1 — BUSINESS         → D1, D2, D4  |  gates G3, G4, G5
-  ITEM 1A — RISK FACTORS    → D2, D3, D4  |  gates G1, G2, G4
-  ITEM 7 — MD&A (NARRATIVE) → D1, D2      |  gate  G3
-  ITEM 2 — PROPERTIES       →             |  gate  G5
-  ITEM 3 — LEGAL PROCEEDINGS→             |  gates G1, G2
+  ITEM 1 — BUSINESS         → D1, D2, D4, D5, D6  |  gates G3, G4, G5, G6
+  ITEM 1A — RISK FACTORS    → D2, D3, D4, D5, D6  |  gates G1, G2, G4
+  ITEM 7 — MD&A (NARRATIVE) → D1, D2, D5, D6      |  gates G3, G6
+  ITEM 2 — PROPERTIES       →                 |  gate  G5
+  ITEM 3 — LEGAL PROCEEDINGS→                 |  gates G1, G2
 
 CRITICAL RULES:
   • Ground EVERY score and gate rating in specific evidence from the filing.
@@ -728,7 +867,15 @@ commentary.
     "score": <float 0-5>,
     "rationale": "<2-4 sentences>"
   },
-  "composite_score": <float — mean of four scores, 2 decimal places>,
+  "dim5_workflow_disintermediation": {
+    "score": <float 0-5>,
+    "rationale": "<2-4 sentences addressing: (1) whether the product is a connector/aggregator/orchestrator vs. terminal endpoint, (2) whether its multi-step workflow can be collapsed by AI agents, (3) whether the end-to-end workflow can be fully automated without it>"
+  },
+  "dim6_interface_substitution": {
+    "score": <float 0-5>,
+    "rationale": "<2-4 sentences addressing: (1) whether product value resides in UI vs. underlying data/logic, (2) whether agents/copilots can bypass the interface, (3) per-seat pricing exposure to seat consolidation, (4) any filing signals about UI commoditization or AI automation of manual steps>"
+  },
+  "composite_score": <float — mean of six scores, 2 decimal places>,
   "vulnerability_label": "<Low|Low-Moderate|Moderate-High|High|Very High>",
   "gates": [
     {
@@ -755,10 +902,16 @@ commentary.
       "name": "Physical Last-Mile",
       "strength": "<None|Low|Medium|High|Very High>",
       "rationale": "<1-2 sentences citing Item 2>"
+    },
+    {
+      "name": "Network Effects",
+      "strength": "<None|Low|Medium|High|Very High>",
+      "rationale": "<1-2 sentences citing Item 1 marketplace/platform structure>"
     }
   ],
-  "first_gate_to_open": "<name of gate with lowest combined strength + erosion speed>",
-  "first_gate_trigger": "<2-3 sentences: the specific event or condition — technological, regulatory, or behavioural — that would open this gate>"
+  "gate_composite_score": <float — weighted average of gate strengths normalized to 0-5, 2 decimal places>,
+  "binding_gate": "<name of gate with highest effective strength (strength × durability) on the critical attack path>",
+  "binding_gate_rationale": "<2-3 sentences: why this gate is binding, what effective strength calculation supports it, and what would need to change to open it>"
 }
 """
 
@@ -867,7 +1020,7 @@ def assess_company(
         try:
             response = client.messages.create(
                 model=model,
-                max_tokens=2048,
+                max_tokens=8000,
                 system=SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_prompt}],
             )
@@ -887,17 +1040,20 @@ def assess_company(
     try:
         clean = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw,
                        flags=re.MULTILINE).strip()
-        data  = json.loads(clean)
+        data, _ = json.JSONDecoder().raw_decode(clean)  # ignores trailing text after JSON
 
-        result.dim1_cognitive_rent       = DimensionScore(**data["dim1_cognitive_rent"])
-        result.dim2_dgf_properties       = DimensionScore(**data["dim2_dgf_properties"])
-        result.dim3_reward_verifiability = DimensionScore(**data["dim3_reward_verifiability"])
-        result.dim4_data_availability    = DimensionScore(**data["dim4_data_availability"])
-        result.composite_score           = round(float(data["composite_score"]), 2)
+        result.dim1_cognitive_rent            = DimensionScore(**data["dim1_cognitive_rent"])
+        result.dim2_dgf_properties            = DimensionScore(**data["dim2_dgf_properties"])
+        result.dim3_reward_verifiability      = DimensionScore(**data["dim3_reward_verifiability"])
+        result.dim4_data_availability         = DimensionScore(**data["dim4_data_availability"])
+        result.dim5_workflow_disintermediation= DimensionScore(**data["dim5_workflow_disintermediation"])
+        result.dim6_interface_substitution    = DimensionScore(**data["dim6_interface_substitution"])
+        result.composite_score                = round(float(data["composite_score"]), 2)
         result.vulnerability_label       = data["vulnerability_label"]
         result.gates                     = [GateAssessment(**g) for g in data["gates"]]
-        result.first_gate_to_open        = data["first_gate_to_open"]
-        result.first_gate_trigger        = data["first_gate_trigger"]
+        result.gate_composite_score      = round(float(data["gate_composite_score"]), 2)
+        result.binding_gate              = data["binding_gate"]
+        result.binding_gate_rationale    = data["binding_gate_rationale"]
 
     except Exception as e:
         result.source_used += f" | JSON parse error: {e}"
@@ -929,8 +1085,11 @@ def print_summary_table(results: list) -> None:
             (f"D1:{score_bar(r.dim1_cognitive_rent.score)} "
              f"D2:{score_bar(r.dim2_dgf_properties.score)} "
              f"D3:{score_bar(r.dim3_reward_verifiability.score)} "
-             f"D4:{score_bar(r.dim4_data_availability.score)}"),
-            r.first_gate_to_open or "—",
+             f"D4:{score_bar(r.dim4_data_availability.score)} "
+             f"D5:{score_bar(r.dim5_workflow_disintermediation.score)} "
+             f"D6:{score_bar(r.dim6_interface_substitution.score)}"),
+            f"{r.gate_composite_score:.2f}",
+            r.binding_gate or "—",
             f"{extracted}/{len(SECTION_CONFIG)}",
         ])
 
@@ -939,18 +1098,19 @@ def print_summary_table(results: list) -> None:
     print("=" * 112)
     print(tabulate(
         rows,
-        headers=["Company", "Ticker", "Score", "Label",
-                 "D1–D4 (higher = riskier)", "First gate", "Sections"],
+        headers=["Company", "Ticker", "Vuln Score", "Label",
+                 "D1–D6 (higher = riskier)", "Gate Score", "Binding gate", "Sections"],
         tablefmt="rounded_outline",
     ))
-    print("D1=Cognitive Rent  D2=DGF Properties  "
-          "D3=Reward Verifiability  D4=Data Availability\n")
+    print("D1=Cognitive Rent  D2=DGF Properties  D3=Reward Verifiability  "
+          "D4=Data Availability  D5=Workflow Disintermediation  D6=Interface Substitution  "
+          "│  Vuln Score=avg(D1–D6)  Gate Score=durability-weighted avg(G1–G6)\n")
 
 
 def print_detail(r: AssessmentResult) -> None:
     print(f"\n{'─' * 84}")
     print(f"  {r.company}  ({r.ticker or 'no ticker'})  "
-          f"│  Score: {r.composite_score:.2f}  │  {r.vulnerability_label}")
+          f"│  Vuln: {r.composite_score:.2f}  │  {r.vulnerability_label}")
     print(f"  Source: {r.source_used}")
     print("  Sections: " + "  ".join(
         f"{k.split('—')[0].strip()}:{v:,}c"
@@ -959,10 +1119,12 @@ def print_detail(r: AssessmentResult) -> None:
     print(f"{'─' * 84}")
 
     for label, dim in [
-        ("D1 Cognitive Rent Share",    r.dim1_cognitive_rent),
-        ("D2 DGF Properties",          r.dim2_dgf_properties),
-        ("D3 Reward Verifiability",     r.dim3_reward_verifiability),
-        ("D4 Data Availability",        r.dim4_data_availability),
+        ("D1 Cognitive Rent Share",         r.dim1_cognitive_rent),
+        ("D2 DGF Properties",               r.dim2_dgf_properties),
+        ("D3 Reward Verifiability",          r.dim3_reward_verifiability),
+        ("D4 Data Availability",             r.dim4_data_availability),
+        ("D5 Workflow Disintermediation",    r.dim5_workflow_disintermediation),
+        ("D6 Interface Substitution",        r.dim6_interface_substitution),
     ]:
         print(f"\n  {label}: {dim.score}/5  {score_bar(dim.score)}")
         for line in textwrap.wrap(dim.rationale, width=76):
@@ -972,8 +1134,9 @@ def print_detail(r: AssessmentResult) -> None:
     for g in r.gates:
         print(f"    {g.name:<26}  {g.strength:<12}  {g.rationale[:70]}")
 
-    print(f"\n  FIRST GATE TO OPEN: {r.first_gate_to_open}")
-    for line in textwrap.wrap(r.first_gate_trigger, width=76):
+    print(f"\n  GATE COMPOSITE SCORE: {r.gate_composite_score:.2f}/5.00")
+    print(f"\n  BINDING GATE: {r.binding_gate}")
+    for line in textwrap.wrap(r.binding_gate_rationale, width=76):
         print(f"    {line}")
 
 
@@ -992,22 +1155,29 @@ def save_csv(results: list, path: str) -> None:
             "d2_dgf_properties":      r.dim2_dgf_properties.score,
             "d3_reward_verif":        r.dim3_reward_verifiability.score,
             "d4_data_avail":          r.dim4_data_availability.score,
+            "d5_workflow_disint":     r.dim5_workflow_disintermediation.score,
+            "d6_interface_subst":     r.dim6_interface_substitution.score,
             "d1_rationale":           r.dim1_cognitive_rent.rationale,
             "d2_rationale":           r.dim2_dgf_properties.rationale,
             "d3_rationale":           r.dim3_reward_verifiability.rationale,
             "d4_rationale":           r.dim4_data_availability.rationale,
+            "d5_rationale":           r.dim5_workflow_disintermediation.rationale,
+            "d6_rationale":           r.dim6_interface_substitution.rationale,
             "gate_regulatory":        gate_dict.get("Regulatory", ""),
             "gate_liability":         gate_dict.get("Liability", ""),
             "gate_inertia":           gate_dict.get("Institutional Inertia", ""),
             "gate_trust":             gate_dict.get("Trust", ""),
             "gate_physical":          gate_dict.get("Physical Last-Mile", ""),
+            "gate_network":           gate_dict.get("Network Effects", ""),
             "gate_regulatory_rat":    gate_rat.get("Regulatory", ""),
             "gate_liability_rat":     gate_rat.get("Liability", ""),
             "gate_inertia_rat":       gate_rat.get("Institutional Inertia", ""),
             "gate_trust_rat":         gate_rat.get("Trust", ""),
             "gate_physical_rat":      gate_rat.get("Physical Last-Mile", ""),
-            "first_gate":             r.first_gate_to_open,
-            "first_gate_trigger":     r.first_gate_trigger,
+            "gate_network_rat":       gate_rat.get("Network Effects", ""),
+            "gate_composite_score":   r.gate_composite_score,
+            "binding_gate":           r.binding_gate,
+            "binding_gate_rationale": r.binding_gate_rationale,
             "item1_chars":            r.sections_extracted.get("ITEM 1 — BUSINESS", 0),
             "item1a_chars":           r.sections_extracted.get("ITEM 1A — RISK FACTORS", 0),
             "item7_chars":            r.sections_extracted.get("ITEM 7 — MD&A (NARRATIVE)", 0),
@@ -1023,23 +1193,32 @@ def save_csv(results: list, path: str) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 COMPANIES = [
-    CompanyInput(name="Shopify",  ticker="SHOP",
-                 file_path="/mnt/user-data/uploads/0001594805-26-000007.txt"),
-    CompanyInput(name="Palantir", ticker="PLTR",
-                 file_path="/mnt/user-data/uploads/0001321655-26-000011.txt"),
-
-    # Supply a local SEC submission file (highest priority, overrides ticker fetch):
-    # CompanyInput(
-    #     name="Shopify",
-    #     ticker="SHOP",
-    #     file_path="/path/to/0001594805-26-000007.txt",
-    # ),
+    CompanyInput(name="DoorDash",   ticker="DASH",
+                 file_path="/Users/yuyuanzhu/QuantResearch/.claude/skills/ai-disruption-assessment/filings/0001628280-25-005715.txt"),
+    CompanyInput(name="Shopify",    ticker="SHOP",
+                 file_path="/Users/yuyuanzhu/QuantResearch/.claude/skills/ai-disruption-assessment/filings/0001594805-26-000007.txt"),
+    CompanyInput(name="Palantir",   ticker="PLTR",
+                 file_path="/Users/yuyuanzhu/QuantResearch/.claude/skills/ai-disruption-assessment/filings/0001321655-26-000011.txt"),
+    CompanyInput(name="FICO",       ticker="FICO",
+                 file_path="/Users/yuyuanzhu/QuantResearch/.claude/skills/ai-disruption-assessment/filings/0000814547-25-000030.txt"),
+    CompanyInput(name="Veeva",      ticker="VEEV",
+                 file_path="/Users/yuyuanzhu/QuantResearch/.claude/skills/ai-disruption-assessment/filings/0001393052-25-000022.txt"),
+    CompanyInput(name="Datadog",    ticker="DDOG",
+                 file_path="/Users/yuyuanzhu/QuantResearch/.claude/skills/ai-disruption-assessment/filings/0001628280-26-008819.txt"),
+    CompanyInput(name="Toast",      ticker="TOST",
+                 file_path="/Users/yuyuanzhu/QuantResearch/.claude/skills/ai-disruption-assessment/filings/0001650164-26-000057.txt"),
+    CompanyInput(name="Trade Desk", ticker="TTD",
+                 file_path="/Users/yuyuanzhu/QuantResearch/.claude/skills/ai-disruption-assessment/filings/0001671933-26-000014.txt"),
+    CompanyInput(name="Robinhood",  ticker="HOOD",
+                 file_path="/Users/yuyuanzhu/QuantResearch/.claude/skills/ai-disruption-assessment/filings/0001783879-26-000023.txt"),
+    CompanyInput(name="DraftKings", ticker="DKNG",
+                 file_path="/Users/yuyuanzhu/QuantResearch/.claude/skills/ai-disruption-assessment/filings/0001883685-26-000013.txt"),
 ]
 
 PRINT_DETAIL = True                      # False = summary table only
-OUTPUT_CSV   = "disruption_scores.csv"
-OUTPUT_PDF   = "disruption_report.pdf"   # Set to None to skip PDF generation
-MODEL        = "claude-opus-4-5"
+OUTPUT_CSV   = "/Users/yuyuanzhu/QuantResearch/.claude/skills/ai-disruption-assessment/outputs/disruption_scores.csv"
+OUTPUT_PDF   = "/Users/yuyuanzhu/QuantResearch/.claude/skills/ai-disruption-assessment/outputs/disruption_report.pdf"
+MODEL        = "claude-opus-4-6"
 
 
 
@@ -1209,22 +1388,29 @@ def _result_to_dict(r) -> dict:
         "d2_dgf_properties":   r.dim2_dgf_properties.score,
         "d3_reward_verif":     r.dim3_reward_verifiability.score,
         "d4_data_avail":       r.dim4_data_availability.score,
+        "d5_workflow_disint":  r.dim5_workflow_disintermediation.score,
+        "d6_interface_subst":  r.dim6_interface_substitution.score,
         "d1_rationale":        r.dim1_cognitive_rent.rationale,
         "d2_rationale":        r.dim2_dgf_properties.rationale,
         "d3_rationale":        r.dim3_reward_verifiability.rationale,
         "d4_rationale":        r.dim4_data_availability.rationale,
+        "d5_rationale":        r.dim5_workflow_disintermediation.rationale,
+        "d6_rationale":        r.dim6_interface_substitution.rationale,
         "gate_regulatory":     gate_dict.get("Regulatory", ""),
         "gate_liability":      gate_dict.get("Liability", ""),
         "gate_inertia":        gate_dict.get("Institutional Inertia", ""),
         "gate_trust":          gate_dict.get("Trust", ""),
         "gate_physical":       gate_dict.get("Physical Last-Mile", ""),
+        "gate_network":        gate_dict.get("Network Effects", ""),
         "gate_regulatory_rat": gate_rat.get("Regulatory", ""),
         "gate_liability_rat":  gate_rat.get("Liability", ""),
         "gate_inertia_rat":    gate_rat.get("Institutional Inertia", ""),
         "gate_trust_rat":      gate_rat.get("Trust", ""),
         "gate_physical_rat":   gate_rat.get("Physical Last-Mile", ""),
-        "first_gate":          r.first_gate_to_open,
-        "first_gate_trigger":  r.first_gate_trigger,
+        "gate_network_rat":    gate_rat.get("Network Effects", ""),
+        "gate_composite_score":   r.gate_composite_score,
+        "binding_gate":           r.binding_gate,
+        "binding_gate_rationale": r.binding_gate_rationale,
         "item1_chars":         r.sections_extracted.get("ITEM 1 — BUSINESS", 0),
         "item1a_chars":        r.sections_extracted.get("ITEM 1A — RISK FACTORS", 0),
         "item7_chars":         r.sections_extracted.get("ITEM 7 — MD&A (NARRATIVE)", 0),
@@ -1243,7 +1429,7 @@ def build_cover(styles, companies):
     story.append(Spacer(1, 0.15 * inch))
     story.append(Paragraph(
         f"Scoring {len(companies)} companies across four structural dimensions "
-        "and five gating mechanisms",
+        "and six gating mechanisms",
         styles["cover_sub"],
     ))
     story.append(Spacer(1, 0.1 * inch))
@@ -1292,7 +1478,7 @@ def build_cover(styles, companies):
     story.append(Paragraph(
         "AI replaces capital for cognitive labor. A company's vulnerability is "
         "determined by four structural dimensions (how much of its revenue derives "
-        "from cognitive tasks AI can compress) filtered through five gating mechanisms "
+        "from cognitive tasks AI can compress) filtered through six gating mechanisms "
         "(structural barriers that slow or block AI substitution). Each dimension is "
         "scored 0–5; the composite is their average.",
         ParagraphStyle("fob", fontSize=9, fontName="Helvetica",
@@ -1325,6 +1511,25 @@ def build_cover(styles, companies):
          "the company's core cognitive tasks? Tasks trainable on abundant public data "
          "score high (risky). Companies with decades of proprietary, hard-to-replicate "
          "transaction records score low (protective data moat)."),
+        ("D5 — Workflow Disintermediation  \u26a0 high score = high risk",
+         "Does AI collapse or bypass the multi-step workflow this product orchestrates? "
+         "Score across three sub-dimensions: (1) Product role — connector, aggregator, or "
+         "orchestrator vs. terminal endpoint; intermediaries are exposed when AI agents can "
+         "call upstream and downstream systems directly. (2) Workflow collapsibility — can "
+         "an AI agent compress the multi-step process into a single prompt-to-output "
+         "sequence? (3) End-to-end automation — can the full workflow be automated without "
+         "the product? Score 0 if deeply embedded terminal endpoint; score 5 if pure "
+         "connector with trivially collapsible workflow."),
+        ("D6 — Interface Substitution  \u26a0 high score = high risk",
+         "Risk that AI agents bypass the product's UI or interaction layer entirely. "
+         "Score across four sub-dimensions: (1) UI-centric value — does value primarily "
+         "reside in UI navigation and workflow steps vs. proprietary underlying data/logic? "
+         "(2) Agent/copilot overlap — can AI agents or copilots replicate the interaction "
+         "layer by calling underlying APIs directly? (3) Seat/license consolidation — "
+         "per-seat pricing threatened when AI reduces the number of human operators needed. "
+         "(4) UI commoditization signals — filing language about AI automation replacing "
+         "manual steps or platform consolidation. Score 0 if value is in irreplaceable "
+         "underlying logic; score 5 if value is almost entirely in the UI/workflow."),
     ]
     for label, body in dims:
         story.append(def_item(label, body))
@@ -1378,35 +1583,64 @@ def build_cover(styles, companies):
     ))
 
     gates = [
-        ("G1 — Regulatory Gate",
-         "Licensing requirements, government approvals, mandatory audits, and "
-         "industry-specific regulations that AI products cannot easily satisfy. "
-         "Strong where a product requires a regulated professional credential "
-         "(medical device approval, banking charter, security clearance) to operate."),
-        ("G2 — Liability Gate",
-         "Who bears legal risk for errors, and does that create friction for AI "
-         "adoption? Strong where a licensed professional bears malpractice exposure "
-         "or the company offers explicit accuracy guarantees backed by indemnification. "
-         "Weak where platform terms disclaim liability to end users."),
-        ("G3 — Institutional Inertia Gate",
-         "Switching costs, embedded workflows, multi-year enterprise contracts, and "
-         "data continuity requirements. An ERP embedded in a Fortune 500's finance "
-         "department for a decade is very strong; an annual consumer habit with no "
-         "data carry-over is very weak."),
-        ("G4 — Trust Gate",
-         "Does the customer require human judgment or physical presence for "
-         "psychological or cultural reasons, independent of whether AI could "
-         "technically do the job? Strong in fiduciary, therapeutic, and high-stakes "
-         "personal advisory contexts; weak for commodity software services."),
-        ("G5 — Physical Last-Mile Gate",
-         "Does the service require physical presence at the point of delivery — "
-         "examination, installation, on-site inspection, in-person treatment? "
-         "A cloud-only SaaS business has essentially no gate here; a national network "
-         "of service technicians has a very strong one."),
+        ("G1 — Regulatory Gate  [Hard ×1.5]",
+         "Does AI deployment require explicit government approval, or do judicial/"
+         "structural rulings bar or slow new AI entrants? Hard gate: holds "
+         "until a policy or judicial decision flips it."),
+        ("G2 — Liability Gate  [Structural ×1.25]",
+         "Who bears the cost of AI error, and does unclear liability create "
+         "human-in-the-loop friction? Includes financial infrastructure embeddedness. "
+         "Opens when liability frameworks clarify through legislation or case law."),
+        ("G3 — Institutional Inertia Gate  [Soft ×1.0]",
+         "Switching costs, procurement cycles, legacy system integration, professional "
+         "guild resistance, and deep integration into customer operations. "
+         "Soft gate: erodes continuously."),
+        ("G4 — Trust Gate  [Soft ×1.0]",
+         "Psychological or cultural requirement for a trusted party — human or "
+         "established brand — at the point of delivery or decision. Erodes "
+         "generationally; erosion is largely irreversible."),
+        ("G5 — Physical Last-Mile Gate  [Structural ×1.25]",
+         "Must the service be delivered in person or at a physical location? Includes "
+         "multi-sided physical coordination. Most structurally durable gate: persists "
+         "until general-purpose robotics matures."),
+        ("G6 — Network Effects Gate  [Structural ×1.25]",
+         "Multi-sided market network effects requiring simultaneous competitive "
+         "displacement across all market sides. Scores the structural difficulty "
+         "of bootstrapping a competing network from scratch."),
     ]
     for label, body in gates:
         story.append(def_item(label, body))
         story.append(Spacer(1, 0.05 * inch))
+
+    # Durability class legend
+    dur_data = [
+        [Paragraph("<b>Durability</b>", ParagraphStyle(
+            "dth", fontSize=8, fontName="Helvetica-Bold", textColor=WHITE, alignment=TA_CENTER)),
+         Paragraph("<b>Weight</b>", ParagraphStyle(
+            "dth2", fontSize=8, fontName="Helvetica-Bold", textColor=WHITE, alignment=TA_CENTER)),
+         Paragraph("<b>Erosion</b>", ParagraphStyle(
+            "dth3", fontSize=8, fontName="Helvetica-Bold", textColor=WHITE))],
+        [Paragraph("Hard", ParagraphStyle("dl1", fontSize=8, fontName="Helvetica-Bold", alignment=TA_CENTER)),
+         Paragraph("×1.5", ParagraphStyle("dl2", fontSize=8, alignment=TA_CENTER)),
+         Paragraph("Requires external authority (policy/judicial) to change", ParagraphStyle("dl3", fontSize=8))],
+        [Paragraph("Structural", ParagraphStyle("dl1", fontSize=8, fontName="Helvetica-Bold", alignment=TA_CENTER)),
+         Paragraph("×1.25", ParagraphStyle("dl2", fontSize=8, alignment=TA_CENTER)),
+         Paragraph("Requires infrastructure/network buildout; doesn't erode from market forces", ParagraphStyle("dl3", fontSize=8))],
+        [Paragraph("Soft", ParagraphStyle("dl1", fontSize=8, fontName="Helvetica-Bold", alignment=TA_CENTER)),
+         Paragraph("×1.0", ParagraphStyle("dl2", fontSize=8, alignment=TA_CENTER)),
+         Paragraph("Erodes continuously through competition and generational change", ParagraphStyle("dl3", fontSize=8))],
+    ]
+    dur_tbl = Table(dur_data, colWidths=[1.0*inch, 0.7*inch, 4.0*inch])
+    dur_tbl.setStyle(TableStyle([
+        ("BACKGROUND",   (0,0),(-1,0), NAVY),
+        ("GRID",         (0,0),(-1,-1), 0.5, BORDER),
+        ("TOPPADDING",   (0,0),(-1,-1), 4),
+        ("BOTTOMPADDING",(0,0),(-1,-1), 4),
+        ("LEFTPADDING",  (0,0),(-1,-1), 8),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1), [WHITE, LIGHT_GRAY]),
+    ]))
+    story.append(Spacer(1, 0.08*inch))
+    story.append(dur_tbl)
 
     story.append(PageBreak())
     return story
@@ -1432,8 +1666,8 @@ def build_summary(styles, rows):
                                               textColor=WHITE, alignment=TA_CENTER)),
         Paragraph("<b>Company</b>", ParagraphStyle("th", fontSize=8, fontName="Helvetica-Bold",
                                                     textColor=WHITE)),
-        Paragraph("<b>Score</b>", ParagraphStyle("th", fontSize=8, fontName="Helvetica-Bold",
-                                                  textColor=WHITE, alignment=TA_CENTER)),
+        Paragraph("<b>Vuln Score</b>", ParagraphStyle("th", fontSize=8, fontName="Helvetica-Bold",
+                                                     textColor=WHITE, alignment=TA_CENTER)),
         Paragraph("<b>Label</b>", ParagraphStyle("th", fontSize=8, fontName="Helvetica-Bold",
                                                   textColor=WHITE, alignment=TA_CENTER)),
         Paragraph("<b>D1</b>", ParagraphStyle("th", fontSize=8, fontName="Helvetica-Bold",
@@ -1444,8 +1678,14 @@ def build_summary(styles, rows):
                                                textColor=WHITE, alignment=TA_CENTER)),
         Paragraph("<b>D4</b>", ParagraphStyle("th", fontSize=8, fontName="Helvetica-Bold",
                                                textColor=WHITE, alignment=TA_CENTER)),
-        Paragraph("<b>First Gate</b>", ParagraphStyle("th", fontSize=8, fontName="Helvetica-Bold",
-                                                       textColor=WHITE)),
+        Paragraph("<b>D5</b>", ParagraphStyle("th", fontSize=8, fontName="Helvetica-Bold",
+                                               textColor=WHITE, alignment=TA_CENTER)),
+        Paragraph("<b>D6</b>", ParagraphStyle("th", fontSize=8, fontName="Helvetica-Bold",
+                                               textColor=WHITE, alignment=TA_CENTER)),
+        Paragraph("<b>Gate Score</b>", ParagraphStyle("th", fontSize=8, fontName="Helvetica-Bold",
+                                                     textColor=WHITE, alignment=TA_CENTER)),
+        Paragraph("<b>Binding Gate</b>", ParagraphStyle("th", fontSize=8, fontName="Helvetica-Bold",
+                                                         textColor=WHITE)),
     ]
     table_data = [header]
 
@@ -1477,13 +1717,20 @@ def build_summary(styles, rows):
                       ParagraphStyle("d", fontSize=8.5, alignment=TA_CENTER)),
             Paragraph(f"{float(r['d4_data_avail']):.1f}",
                       ParagraphStyle("d", fontSize=8.5, alignment=TA_CENTER)),
-            Paragraph(r["first_gate"],
+            Paragraph(f"{float(r['d5_workflow_disint']):.1f}",
+                      ParagraphStyle("d", fontSize=8.5, alignment=TA_CENTER)),
+            Paragraph(f"{float(r['d6_interface_subst']):.1f}",
+                      ParagraphStyle("d", fontSize=8.5, alignment=TA_CENTER)),
+            Paragraph(f"<b>{float(r['gate_composite_score']):.2f}</b>",
+                      ParagraphStyle("gc", fontSize=9, fontName="Helvetica-Bold",
+                                     alignment=TA_CENTER)),
+            Paragraph(r["binding_gate"],
                       ParagraphStyle("fg", fontSize=7.5, fontName="Helvetica",
                                      textColor=MID_GRAY)),
         ])
 
-    col_widths = [0.3*inch, 1.55*inch, 0.55*inch, 1.2*inch,
-                  0.4*inch, 0.4*inch, 0.4*inch, 0.4*inch, 1.3*inch]
+    col_widths = [0.22*inch, 1.0*inch, 0.4*inch, 0.95*inch,
+                  0.28*inch, 0.28*inch, 0.28*inch, 0.28*inch, 0.28*inch, 0.28*inch, 0.45*inch, 1.1*inch]
 
     tbl = Table(table_data, colWidths=col_widths, repeatRows=1)
 
@@ -1510,9 +1757,9 @@ def build_summary(styles, rows):
     # Legend
     story.append(Spacer(1, 0.15 * inch))
     story.append(Paragraph(
-        "D1 = Cognitive Rent Share  ·  D2 = DGF Properties  ·  "
-        "D3 = Reward Verifiability  ·  D4 = Data Availability  "
-        "(all scored 0–5, higher = more vulnerable)",
+        "D1 = Cognitive Rent Share  ·  D2 = DGF Properties  ·  D3 = Reward Verifiability  "
+        "·  D4 = Data Availability  ·  D5 = Workflow Disintermediation  "
+        "·  D6 = Interface Substitution  (all scored 0–5, higher = more vulnerable)",
         styles["caption"],
     ))
     return story
@@ -1538,7 +1785,7 @@ def build_company_detail(styles, r):
     header_table = Table([[
         Paragraph(f"<b>{r['company']}</b>", styles["company_head"]),
         Paragraph(
-            f"Score: <b>{float(r['composite_score']):.2f}</b> / 5.00",
+            f"Vuln: <b>{float(r['composite_score']):.2f}</b> / 5.00",
             ParagraphStyle("hs", fontSize=11, fontName="Helvetica-Bold",
                            textColor=WHITE, alignment=TA_RIGHT),
         ),
@@ -1583,13 +1830,19 @@ def build_company_detail(styles, r):
                ("Item 1 — Business",      "item1_chars")],
         "D4": [("Item 1 — Business",      "item1_chars"),
                ("Item 1A — Risk Factors", "item1a_chars")],
+        "D5": [("Item 1 — Business",      "item1_chars"),
+               ("Item 1A — Risk Factors", "item1a_chars")],
+        "D6": [("Item 1 — Business",      "item1_chars"),
+               ("Item 1A — Risk Factors", "item1a_chars")],
     }
 
     dims = [
-        ("D1", "D1 — Cognitive Rent Share",  r["d1_cognitive_rent"],  r["d1_rationale"]),
-        ("D2", "D2 — DGF Properties",        r["d2_dgf_properties"],  r["d2_rationale"]),
-        ("D3", "D3 — Reward Verifiability",  r["d3_reward_verif"],    r["d3_rationale"]),
-        ("D4", "D4 — Data Availability",     r["d4_data_avail"],      r["d4_rationale"]),
+        ("D1", "D1 — Cognitive Rent Share",        r["d1_cognitive_rent"],    r["d1_rationale"]),
+        ("D2", "D2 — DGF Properties",              r["d2_dgf_properties"],    r["d2_rationale"]),
+        ("D3", "D3 — Reward Verifiability",         r["d3_reward_verif"],      r["d3_rationale"]),
+        ("D4", "D4 — Data Availability",            r["d4_data_avail"],        r["d4_rationale"]),
+        ("D5", "D5 — Workflow Disintermediation",   r["d5_workflow_disint"],   r["d5_rationale"]),
+        ("D6", "D6 — Interface Substitution",       r["d6_interface_subst"],   r["d6_rationale"]),
     ]
 
     story.append(Paragraph("Dimension Scores", ParagraphStyle(
@@ -1688,6 +1941,7 @@ def build_company_detail(styles, r):
         ("Institutional Inertia", r["gate_inertia"],   r["gate_inertia_rat"]),
         ("Trust",               r["gate_trust"],       r["gate_trust_rat"]),
         ("Physical Last-Mile",  r["gate_physical"],    r["gate_physical_rat"]),
+        ("Network Effects",     r["gate_network"],     r["gate_network_rat"]),
     ]
 
     gate_data = []
@@ -1721,23 +1975,25 @@ def build_company_detail(styles, r):
     gate_tbl.setStyle(TableStyle(gate_style_cmds))
     story.append(gate_tbl)
 
-    # ── First gate trigger ─────────────────────────────────────────────────
+    # ── Gate composite score + Binding gate ─────────────────────────────────
     story.append(Spacer(1, 0.1 * inch))
-    trigger_box = Table([[
+    gate_score_box = Table([[
         Paragraph(
-            f"First Gate to Open: <b>{r['first_gate']}</b>",
+            f"Gate Composite Score: <b>{float(r['gate_composite_score']):.2f} / 5.00</b>"
+            f"&nbsp;&nbsp;&nbsp;·&nbsp;&nbsp;&nbsp;"
+            f"Binding Gate: <b>{r['binding_gate']}</b>",
             ParagraphStyle("fgt", fontSize=9, fontName="Helvetica-Bold",
                            textColor=WHITE),
         ),
     ]], colWidths=[6.5*inch])
-    trigger_box.setStyle(TableStyle([
+    gate_score_box.setStyle(TableStyle([
         ("BACKGROUND",    (0,0),(-1,-1), TEAL),
         ("TOPPADDING",    (0,0),(-1,-1), 6),
         ("BOTTOMPADDING", (0,0),(-1,-1), 6),
         ("LEFTPADDING",   (0,0),(-1,-1), 10),
     ]))
-    story.append(trigger_box)
-    story.append(Paragraph(r["first_gate_trigger"], ParagraphStyle(
+    story.append(gate_score_box)
+    story.append(Paragraph(r["binding_gate_rationale"], ParagraphStyle(
         "ftrig", fontSize=8.5, fontName="Helvetica", textColor=colors.HexColor("#374151"),
         leading=13, spaceBefore=5, spaceAfter=4,
         leftIndent=10, rightIndent=10,
